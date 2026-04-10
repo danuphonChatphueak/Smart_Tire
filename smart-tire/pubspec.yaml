@@ -1,0 +1,37 @@
+name: smarttire
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  dio: ^5.7.0
+  camera: ^0.11.0+2
+  image_picker: ^1.1.2
+  fl_chart: ^0.69.2
+  flutter_local_notifications: ^18.0.1
+  permission_handler: ^11.3.1
+  android_alarm_manager_plus: ^4.0.4
+  sqflite: ^2.4.1
+  path: ^1.9.0
+  local_auth: ^2.1.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/20260314_153627.jpg
+    - assets/image.png
+    - assets/IMG_1731.png
