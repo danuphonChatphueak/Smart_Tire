@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+
+# Git
+.git/
+.gitattributes
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Misc
+uploads/
+build.sh
+deactivate
+pyrightconfig.json
+Navigator.pop(context
+*.md
