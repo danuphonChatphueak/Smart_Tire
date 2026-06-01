@@ -1,2 +1,31 @@
-.vscode/ 
-c
+﻿# IDE
+.vscode/
+.idea/
+
+# Flutter/Dart
+smart-tire/.dart_tool/
+smart-tire/.flutter-plugins
+smart-tire/.flutter-plugins-dependencies
+smart-tire/.packages
+smart-tire/build/
+smart-tire/.pub-cache/
+smart-tire/BoxConstraints.tightFor(
+smart-tire/EdgeInsets.only(
+smart-tire/Get
+smart-tire/Offset(childCrossPosition
+smart-tire/Offset(childMainPosition
+smart-tire/Process
+smart-tire/Run
+smart-tire/switch
+*.g.dart
+
+# Backend (Python / FastAPI)
+backend/__pycache__/
+backend/*.pyc
+backend/.env
+backend/.venv/
+backend/venv/
+
+# Model files (large binaries โ€” keep out of git unless intentional)
+# backend/*.pt
+# backend/*.pth

@@ -195,20 +195,24 @@ class ModelsRuntime:
         self.det: Optional[YOLO] = None
         self.rec: Optional[torch.nn.Module] = None
         self.depth: Optional[torch.nn.Module] = None
+        self.mask_model: Optional[YOLO] = None  # YOLO สำหรับ gap-pixel tread depth
         self.calib_a = 1.0
         self.calib_b = 0.0
+        # Gap-pixel calibration coefficients (โหลดจาก settings)
+        self.gap_a: float = float(settings.gap_calib_a)
+        self.gap_b: float = float(settings.gap_calib_b)
 
         self._load_all()
 
     def _load_all(self):
         """
-        PyTorch 2.6+ จะ default weights_only=True ทำให้ Ultralytics .pt โหลดไม่ผ่าน
-        เรา patch torch.load ชั่วคราวให้ weights_only=False เฉพาะตอน YOLO(self.det_path)
+        โหลด model ทุกตัวแบบ optional — ไม่มีไฟล์ไหนจะ skip แทนที่จะ crash
+        เพื่อให้ tread mode ยังใช้งานได้แม้ไม่มี sidewall models
         """
         import torch  # local import กันชน
 
         # =========================
-        # ✅ PATCH torch.load (สำคัญมาก)
+        # ✅ PATCH torch.load (PyTorch 2.6+ compat)
         # =========================
         _orig_torch_load = torch.load
 
@@ -219,32 +223,46 @@ class ModelsRuntime:
 
         torch.load = _torch_load_compat
         try:
-            # 1) YOLO Detection
-            self.det = YOLO(self.det_path)
+            # 1a) YOLO Detection (sidewall — optional)
+            if os.path.exists(self.det_path):
+                self.det = YOLO(self.det_path)
+                print(f"[ModelsRuntime] ✅ det_model loaded from {self.det_path}")
+            else:
+                print(f"[ModelsRuntime] ⚠️ det model not found at {self.det_path}, sidewall detection disabled")
+
+            # 1b) YOLO Mask model สำหรับ gap-pixel tread depth (หลัก)
+            if os.path.exists(settings.mask_model_path):
+                self.mask_model = YOLO(settings.mask_model_path)
+                print(f"[ModelsRuntime] ✅ mask_model loaded from {settings.mask_model_path}")
+            else:
+                print(f"[ModelsRuntime] ⚠️ mask.pt not found at {settings.mask_model_path}, tread prediction disabled")
         finally:
             torch.load = _orig_torch_load
 
-        # 2) Recognition (CRNN)
-        # Check if torch.load supports weights_only
+        # 2) Recognition CRNN (optional — ใช้เฉพาะ sidewall mode)
         load_kwargs = {"map_location": self.device}
         if "weights_only" in inspect.signature(torch.load).parameters:
             load_kwargs["weights_only"] = False
 
-        rec_obj = torch.load(self.rec_path, **load_kwargs)
-
-        if isinstance(rec_obj, torch.nn.Module):
-            self.rec = rec_obj
-        elif isinstance(rec_obj, (dict, collections.OrderedDict)):
-            # state_dict → สร้าง CRNN model แล้วโหลด weights
-            print("[ModelsRuntime] rec model is state_dict, building CRNN...")
-            self.rec = _build_model_from_state_dict(rec_obj, len(self.charset))
+        if os.path.exists(self.rec_path):
+            try:
+                rec_obj = torch.load(self.rec_path, **load_kwargs)
+                if isinstance(rec_obj, torch.nn.Module):
+                    self.rec = rec_obj
+                elif isinstance(rec_obj, (dict, collections.OrderedDict)):
+                    print("[ModelsRuntime] rec model is state_dict, building CRNN...")
+                    self.rec = _build_model_from_state_dict(rec_obj, len(self.charset))
+                else:
+                    raise TypeError(f"Unexpected rec model type: {type(rec_obj)}")
+                self.rec.to(self.device)
+                self.rec.eval()
+                print(f"[ModelsRuntime] ✅ rec_model loaded from {self.rec_path}")
+            except Exception as e:
+                print(f"[ModelsRuntime] ⚠️ rec_model load failed: {e}, recognition disabled")
         else:
-            raise TypeError(f"Unexpected rec model type: {type(rec_obj)}")
-        self.rec.to(self.device)
-        self.rec.eval()
+            print(f"[ModelsRuntime] ⚠️ rec model not found at {self.rec_path}, recognition disabled")
 
-        # 3) Depth
-        # Load calibration coefficients
+        # 3) Legacy Depth model (optional — ปัจจุบันใช้ mask+gap-pixel แทนแล้ว)
         calib_path = os.path.join(os.path.dirname(self.depth_path), "calibration.npz")
         if os.path.exists(calib_path):
             try:
@@ -255,36 +273,28 @@ class ModelsRuntime:
             except Exception as e:
                 print(f"[ModelsRuntime] Warning: Could not load calibration coefficients: {e}")
 
-        # The new model architecture: TireSegDepthModel
-        # Based on user snippet, we should load from settings.depth_model_path which is now model_final.pt
-        # Or we can check if it's the old depth_tire.pt. 
-        # User said files are in backend/app/models. 
-        # Let's check for model_final.pt specifically.
         model_final_path = os.path.join(os.path.dirname(self.depth_path), "model_final.pt")
         target_path = model_final_path if os.path.exists(model_final_path) else self.depth_path
 
-        print(f"[ModelsRuntime] Loading depth model from {target_path}...")
-        
-        # Load weights
-        depth_obj = torch.load(
-            target_path,
-            map_location=self.device,
-            weights_only=False,
-        )
-
-        # Build architecture
-        self.depth = TireSegDepthModel().to(self.device)
-        
-        if isinstance(depth_obj, torch.nn.Module):
-            self.depth = depth_obj
-        elif isinstance(depth_obj, (dict, collections.OrderedDict)):
-            self.depth.load_state_dict(depth_obj, strict=False)
-            print(f"[ModelsRuntime] ✅ TireSegDepthModel loaded from state_dict")
+        if os.path.exists(target_path):
+            try:
+                print(f"[ModelsRuntime] Loading legacy depth model from {target_path}...")
+                depth_obj = torch.load(target_path, map_location=self.device, weights_only=False)
+                self.depth = TireSegDepthModel().to(self.device)
+                if isinstance(depth_obj, torch.nn.Module):
+                    self.depth = depth_obj
+                elif isinstance(depth_obj, (dict, collections.OrderedDict)):
+                    self.depth.load_state_dict(depth_obj, strict=False)
+                    print(f"[ModelsRuntime] ✅ TireSegDepthModel loaded from state_dict")
+                else:
+                    raise TypeError(f"Unexpected depth model type: {type(depth_obj)}")
+                self.depth.to(self.device)
+                self.depth.eval()
+            except Exception as e:
+                print(f"[ModelsRuntime] ⚠️ legacy depth model load failed: {e}")
         else:
-            raise TypeError(f"Unexpected depth model type: {type(depth_obj)}")
-        
-        self.depth.to(self.device)
-        self.depth.eval()
+            print(f"[ModelsRuntime] ⚠️ legacy depth model not found at {target_path} (ไม่จำเป็น — ใช้ gap-pixel แทน)")
+
 
     # ---------- 1) DETECTION ----------
     def detect_code_box(self, bgr: np.ndarray, conf_thres: float = 0.25) -> Tuple[dict[str, Optional[DetResult]], bool]:
@@ -905,11 +915,93 @@ class ModelsRuntime:
 
     def predict_tread(self, bgr: np.ndarray) -> Optional[float]:
         """
-        Full pipeline for Tread:
-        ส่งรูปตรง ๆ เข้าโมเดลเลย ไม่มีการเตรียมรูปหรือหมุนซ้ำ
+        วัดความลึกดอกยางด้วยวิธี YOLO gap-pixel (g.py approach):
+        1. ใช้ mask_model (mask.pt) แยก top / bottom surface
+        2. นับ pixel gap ระหว่าง top edge และ bottom edge
+        3. กรองด้วย strict filter (CV, MAD)
+        4. depth_mm = gap_a * ln(median_gap) + gap_b
+        Returns: depth in mm, or None ถ้าภาพไม่ผ่าน filter
         """
-        d, _ = self.predict_depth_mm(bgr)
-        return d
+        if self.mask_model is None:
+            print("[predict_tread] mask_model not loaded, returning None")
+            return None
+
+        # --- Filtering parameters (โหลดจาก settings) ---
+        MIN_GAPS    = int(settings.gap_min_count)
+        MIN_GAP_PX  = float(settings.gap_min_px)
+        MAX_GAP_PX  = float(settings.gap_max_px)
+        MAX_CV      = float(settings.gap_max_cv)
+        MAX_MAD     = float(settings.gap_max_mad)
+        MIN_DEPTH   = float(settings.gap_min_depth_mm)
+        MAX_DEPTH   = float(settings.gap_max_depth_mm)
+
+        h, w = bgr.shape[:2]
+        yolo_results = self.mask_model(bgr, conf=0.3, verbose=False)[0]
+
+        if yolo_results.masks is None or yolo_results.boxes is None:
+            print("[predict_tread] No masks detected")
+            return None
+
+        top_mask = np.zeros((h, w), dtype=np.uint8)
+        bot_mask = np.zeros((h, w), dtype=np.uint8)
+
+        for i, mask in enumerate(yolo_results.masks.data):
+            cls = int(yolo_results.boxes.cls[i])
+            m = cv2.resize(mask.cpu().numpy(), (w, h))
+            m_bin = (m > 0.5).astype(np.uint8) * 255
+            name = yolo_results.names[cls]
+            if 'top' in name:
+                top_mask = cv2.bitwise_or(top_mask, m_bin)
+            if 'bottom' in name:
+                bot_mask = cv2.bitwise_or(bot_mask, m_bin)
+
+        # Clean masks
+        kernel = np.ones((5, 5), np.uint8)
+        top_mask = cv2.morphologyEx(top_mask, cv2.MORPH_CLOSE, kernel)
+        bot_mask = cv2.morphologyEx(bot_mask, cv2.MORPH_CLOSE, kernel)
+
+        # Scan vertical columns
+        step = max(1, w // 150)
+        gaps: List[float] = []
+        for x in range(0, w, step):
+            y_top = np.where(top_mask[:, x] > 0)[0]
+            if len(y_top) == 0:
+                continue
+            y_top_edge = int(y_top[-1])   # bottom edge of top surface
+
+            y_bot = np.where(bot_mask[:, x] > 0)[0]
+            if len(y_bot) == 0:
+                continue
+            y_bot_valid = y_bot[y_bot > y_top_edge]
+            if len(y_bot_valid) == 0:
+                continue
+            y_bot_edge = int(y_bot_valid[0])  # top edge of groove
+
+            gap = y_bot_edge - y_top_edge
+            if MIN_GAP_PX < gap < MAX_GAP_PX:
+                gaps.append(float(gap))
+
+        if len(gaps) < MIN_GAPS:
+            print(f"[predict_tread] Not enough gaps: {len(gaps)} < {MIN_GAPS}")
+            return None
+
+        gaps_arr = np.array(gaps)
+        median_gap = float(np.median(gaps_arr))
+        mean_gap   = float(np.mean(gaps_arr))
+        std_gap    = float(np.std(gaps_arr))
+        cv         = std_gap / mean_gap if mean_gap > 0 else 1.0
+        mad        = float(np.median(np.abs(gaps_arr - median_gap)))
+
+        if cv > MAX_CV or mad > MAX_MAD:
+            print(f"[predict_tread] Filter failed: CV={cv:.3f} MAD={mad:.1f}")
+            return None
+
+        # Log formula: depth = A * ln(median_gap) + B
+        depth_mm = self.gap_a * float(np.log(median_gap)) + self.gap_b
+        depth_mm = float(np.clip(depth_mm, MIN_DEPTH, MAX_DEPTH))
+
+        print(f"[predict_tread] gap={median_gap:.1f}px CV={cv:.3f} MAD={mad:.1f} -> depth={depth_mm:.2f}mm")
+        return depth_mm
 
 # ---------------------------
 # ✅ Lazy singleton (แนะนำ)

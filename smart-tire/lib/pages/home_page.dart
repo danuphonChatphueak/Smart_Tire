@@ -990,7 +990,7 @@ class _HomePageState extends State<HomePage> {
                                           : (_isTreadOld(t) ? Colors.orangeAccent : null),
                                     ),
                                     _infoLine(
-                                      "ระยะทางปลอดภัยที่ยังสามารถวิ่งได้",
+                                      "ระยะทางที่สามารถวิ่งได้อย่างปลอดภัย",
                                       _safeDistanceLabel(depth),
                                       color: (depth != null && depth < 1.6)
                                           ? Colors.redAccent
@@ -1293,7 +1293,7 @@ class _HomePageState extends State<HomePage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            "ข้อมูลขนาดยางหรือไซส์โค้ด",
+            "ข้อมูลขนาดยางหรือไซส์ยาง",
             style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.3),
           ),
           const SizedBox(height: 6),

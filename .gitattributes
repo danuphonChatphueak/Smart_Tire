@@ -1,2 +1,30 @@
-*.pt filter=lfs diff=lfs merge=lfs -text
+﻿# Git LFS for large model files
+*.pt  filter=lfs diff=lfs merge=lfs -text
 *.pth filter=lfs diff=lfs merge=lfs -text
+
+# Force LF line endings for all text files
+* text=auto eol=lf
+
+# Dart / Flutter
+*.dart text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+
+# Python / FastAPI
+*.py   text eol=lf
+*.txt  text eol=lf
+*.env  text eol=lf
+
+# Git config files
+.gitignore     text eol=lf
+.gitattributes text eol=lf
+
+# Binary files โ€” no line ending conversion
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.zip  binary
