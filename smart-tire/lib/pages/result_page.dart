@@ -180,9 +180,9 @@ class _ResultPageState extends State<ResultPage> {
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
-        title: const Text("ระดับดอกยางต่ำกว่าเกณฑ์"),
+        title: const Text("ไม่สามารถวัดค่าความลึกได้"),
         content: const Text(
-          "ความลึกที่วัดได้ตอนนี้ต่ำกว่าเกณฑ์ขั้นต่ำ ควรเปลี่ยนยางหรือให้ถ่ายใหม่ดอกยางอีกครั้ง",
+          "โดยอาจมีสาเหตุจากแสงไม่พอหรือการวางกล้องที่ไม่เหมาะสม \nกรุณาลองถ่ายใหม่อีกครั้ง",
         ),
         actions: [
           TextButton(
@@ -190,13 +190,7 @@ class _ResultPageState extends State<ResultPage> {
               Navigator.pop(context); // Close dialog
               Navigator.pop(context); // Back to capture
             },
-            child: const Text("ถ่ายใหม่"),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context); // Close dialog, allow save
-            },
-            child: const Text("ตกลง", style: TextStyle(color: Colors.red)),
+            child: const Text("ถ่ายใหม่",style: TextStyle(color: Colors.red)),
           ),
         ],
       ),

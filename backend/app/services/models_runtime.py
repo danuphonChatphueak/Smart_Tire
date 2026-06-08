@@ -22,6 +22,176 @@ from transformers import SegformerConfig, SegformerForSemanticSegmentation
 from app.core.config import settings
 
 
+# ─────────────────────────────────────────────────────────
+#  Ultimate Final Profiler v16 — module-level helper functions
+# ─────────────────────────────────────────────────────────
+
+def _advanced_image_enhancement_v16(mask: np.ndarray) -> np.ndarray:
+    """ปรับปรุงคุณภาพ Mask: เชื่อมรอยแหว่ง (Close) แล้วลบ noise (Open)"""
+    if np.sum(mask) == 0:
+        return mask
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 9))
+    cleaned = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)
+    kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, kernel_open)
+    return cleaned
+
+
+def _scan_individual_grooves_v16(
+    top_mask: np.ndarray,
+    bot_mask: np.ndarray,
+    cfg,
+) -> tuple:
+    """
+    สแกนร่องยางด้วยอัลกอริทึม v16:
+    - ROI กลางภาพ (scan_center_ratio)
+    - IQR กรอง global outlier
+    - จัดกลุ่มร่องที่เชื่อมต่อกัน
+    - Z-Score กรอง noise ต่อร่อง
+    - P75 ต่อร่อง + ชดเชยโค้งด้วย Polynomial
+    - Fallback median global เมื่อนับร่องผิด
+    คืนค่า: (depth_mm | None, grooves_found, status_str)
+    """
+    h, w = top_mask.shape
+    combined = cv2.bitwise_or(top_mask, bot_mask)
+    x_cols = np.where(np.any(combined > 0, axis=0))[0]
+
+    if len(x_cols) < 20:
+        return None, 0, "ขอบเขตเลเซอร์แคบเกิน"
+
+    cx = (int(x_cols[0]) + int(x_cols[-1])) // 2
+    half_span = int((int(x_cols[-1]) - int(x_cols[0])) * cfg.tread_scan_center_ratio / 2)
+    roi_x0 = max(int(x_cols[0]), cx - half_span)
+    roi_x1 = min(int(x_cols[-1]), cx + half_span)
+
+    step = max(1, w // cfg.tread_scan_density)
+    raw_gaps, raw_spans, scan_lines, valid_xs = [], [], [], []
+
+    for x in range(roi_x0, roi_x1, step):
+        if x >= w:
+            continue
+        y_top_px = np.where(top_mask[:, x] > 0)[0]
+        y_bot_px = np.where(bot_mask[:, x] > 0)[0]
+        if len(y_top_px) == 0 or len(y_bot_px) == 0:
+            continue
+
+        y_top_edge = int(y_top_px[-1])
+        y_bot_candidates = y_bot_px[y_bot_px > y_top_edge]
+        if len(y_bot_candidates) == 0:
+            continue
+        y_bot_edge = int(y_bot_candidates[0])
+
+        gap = y_bot_edge - y_top_edge
+        total_span = int(y_bot_px[-1]) - int(y_top_px[0])
+
+        if total_span > h * cfg.tread_max_span_ratio:
+            continue
+        if cfg.tread_min_gap_px < gap < cfg.tread_max_gap_px and total_span > cfg.tread_min_pattern_span_px:
+            valid_xs.append(x)
+            raw_gaps.append(float(gap))
+            raw_spans.append(float(total_span))
+            scan_lines.append(((x, y_top_edge), (x, y_bot_edge)))
+
+    if len(raw_gaps) < 15:
+        return None, 0, "เส้นสแกนรวมน้อยเกินเกณฑ์"
+
+    # ── IQR กรอง global ──
+    arr_gaps = np.array(raw_gaps)
+    arr_spans = np.array(raw_spans)
+    q1, q3 = np.percentile(arr_gaps, 25), np.percentile(arr_gaps, 75)
+    iqr = q3 - q1
+    valid_mask = (
+        (arr_gaps >= q1 - cfg.tread_iqr_multiplier * iqr) &
+        (arr_gaps <= q3 + cfg.tread_iqr_multiplier * iqr)
+    )
+
+    filtered_xs = [valid_xs[i] for i in range(len(valid_xs)) if valid_mask[i]]
+    filtered_gaps = arr_gaps[valid_mask]
+    filtered_spans = arr_spans[valid_mask]
+    filtered_lines = [scan_lines[i] for i in range(len(scan_lines)) if valid_mask[i]]
+
+    if len(filtered_xs) < 10:
+        return None, 0, "ไม่มีเส้นสแกนเหลือ"
+
+    # ── สร้าง Polynomial ชดเชยความโค้ง ──
+    global_span = float(np.median(filtered_spans))
+    use_poly = False
+    span_model = None
+    if len(filtered_xs) > 15:
+        p_coeff = np.polyfit(filtered_xs, filtered_spans, 2)
+        span_model = np.poly1d(p_coeff)
+        use_poly = True
+
+    # ── จัดกลุ่มร่องที่เชื่อมต่อกัน ──
+    grooves_groups = []
+    current_group = []
+    max_break_px = 30
+
+    for i in range(len(filtered_xs)):
+        if i == 0:
+            current_group.append(i)
+        else:
+            if filtered_xs[i] - filtered_xs[i - 1] <= max_break_px:
+                current_group.append(i)
+            else:
+                grooves_groups.append(current_group)
+                current_group = [i]
+    if current_group:
+        grooves_groups.append(current_group)
+
+    valid_grooves_depths = []
+
+    for g_indices in grooves_groups:
+        g_xs = [filtered_xs[idx] for idx in g_indices]
+        if len(g_indices) < 5 or (g_xs[-1] - g_xs[0]) < 10:
+            continue
+
+        g_gaps = [filtered_gaps[idx] for idx in g_indices]
+
+        # Z-Score กรอง noise ต่อร่อง
+        g_gaps_arr = np.array(g_gaps)
+        mean_gap = np.mean(g_gaps_arr)
+        std_gap = max(np.std(g_gaps_arr), 1.0)
+        valid_sub = [
+            idx for idx in range(len(g_gaps))
+            if abs(g_gaps[idx] - mean_gap) / std_gap <= 1.5
+        ]
+        if len(valid_sub) < 3:
+            continue
+
+        clean_gaps = [g_gaps[idx] for idx in valid_sub]
+        g_gap_final = float(np.percentile(clean_gaps, 75))  # P75
+
+        # ดึง local_span จาก Polynomial หรือ global
+        g_cx = float(np.mean(g_xs))
+        if use_poly and span_model is not None:
+            local_span = float(span_model(g_cx))
+            local_span = float(np.clip(local_span, global_span * 0.75, global_span * 1.25))
+        else:
+            local_span = global_span
+
+        g_depth_mm = (g_gap_final / local_span) * cfg.tread_default_span_mm
+
+        if 2.0 <= g_depth_mm <= 8.5:
+            valid_grooves_depths.append(g_depth_mm)
+
+    grooves_found = len(valid_grooves_depths)
+
+    # ── Fallback: ร่อง < 2 หรือ > max_valid_grooves ──
+    if grooves_found < 2 or grooves_found > cfg.tread_max_valid_grooves:
+        global_gap = float(np.median(filtered_gaps))
+        fallback_depth = (global_gap / global_span) * cfg.tread_default_span_mm
+        fallback_depth = float(np.clip(
+            fallback_depth,
+            cfg.tread_fallback_clip_min,
+            cfg.tread_fallback_clip_max,
+        ))
+        return fallback_depth, grooves_found, "SUCCESS"
+
+    final_depth_mm = float(np.median(valid_grooves_depths))
+    return final_depth_mm, grooves_found, "SUCCESS"
+
+
 class BidirectionalLSTM(nn.Module):
     def __init__(self, input_size: int, hidden_size: int, output_size: int):
         super().__init__()
@@ -915,92 +1085,72 @@ class ModelsRuntime:
 
     def predict_tread(self, bgr: np.ndarray) -> Optional[float]:
         """
-        วัดความลึกดอกยางด้วยวิธี YOLO gap-pixel (g.py approach):
-        1. ใช้ mask_model (mask.pt) แยก top / bottom surface
-        2. นับ pixel gap ระหว่าง top edge และ bottom edge
-        3. กรองด้วย strict filter (CV, MAD)
-        4. depth_mm = gap_a * ln(median_gap) + gap_b
-        Returns: depth in mm, or None ถ้าภาพไม่ผ่าน filter
+        วัดความลึกดอกยางด้วย Ultimate Final Profiler v16:
+        1. YOLO (mask.pt) แยก top / bottom laser surface
+        2. advanced_image_enhancement — Close+Open morphology
+        3. scan_individual_grooves_v16:
+           - ROI กลาง (scan_center_ratio)
+           - IQR กรอง global
+           - จัดกลุ่มร่อง + Z-Score ต่อร่อง
+           - P75 ต่อร่อง + Polynomial ชดเชยโค้ง
+           - Fallback median เมื่อนับร่องผิด
+        4. คืนค่า depth_mm หรือ None
         """
         if self.mask_model is None:
             print("[predict_tread] mask_model not loaded, returning None")
             return None
 
-        # --- Filtering parameters (โหลดจาก settings) ---
-        MIN_GAPS    = int(settings.gap_min_count)
-        MIN_GAP_PX  = float(settings.gap_min_px)
-        MAX_GAP_PX  = float(settings.gap_max_px)
-        MAX_CV      = float(settings.gap_max_cv)
-        MAX_MAD     = float(settings.gap_max_mad)
-        MIN_DEPTH   = float(settings.gap_min_depth_mm)
-        MAX_DEPTH   = float(settings.gap_max_depth_mm)
-
         h, w = bgr.shape[:2]
-        yolo_results = self.mask_model(bgr, conf=0.3, verbose=False)[0]
+
+        # ── 1. YOLO inference ──
+        yolo_results = self.mask_model(
+            bgr,
+            conf=settings.tread_conf_threshold,
+            verbose=False,
+        )[0]
 
         if yolo_results.masks is None or yolo_results.boxes is None:
             print("[predict_tread] No masks detected")
             return None
 
+        # ── 2. แยก top / bottom mask ──
         top_mask = np.zeros((h, w), dtype=np.uint8)
         bot_mask = np.zeros((h, w), dtype=np.uint8)
 
-        for i, mask in enumerate(yolo_results.masks.data):
+        for i, mask_tensor in enumerate(yolo_results.masks.data):
             cls = int(yolo_results.boxes.cls[i])
-            m = cv2.resize(mask.cpu().numpy(), (w, h))
-            m_bin = (m > 0.5).astype(np.uint8) * 255
-            name = yolo_results.names[cls]
-            if 'top' in name:
+            m = cv2.resize(mask_tensor.cpu().numpy(), (w, h), interpolation=cv2.INTER_NEAREST)
+            m_bin = (m > settings.tread_mask_threshold).astype(np.uint8) * 255
+            name = yolo_results.names[cls].lower()
+            if "top" in name:
                 top_mask = cv2.bitwise_or(top_mask, m_bin)
-            if 'bottom' in name:
+            elif "bottom" in name or "bot" in name:
                 bot_mask = cv2.bitwise_or(bot_mask, m_bin)
 
-        # Clean masks
-        kernel = np.ones((5, 5), np.uint8)
-        top_mask = cv2.morphologyEx(top_mask, cv2.MORPH_CLOSE, kernel)
-        bot_mask = cv2.morphologyEx(bot_mask, cv2.MORPH_CLOSE, kernel)
+        # ── 3. ปรับปรุง Mask (v16 enhancement) ──
+        top_mask = _advanced_image_enhancement_v16(top_mask)
+        bot_mask = _advanced_image_enhancement_v16(bot_mask)
 
-        # Scan vertical columns
-        step = max(1, w // 150)
-        gaps: List[float] = []
-        for x in range(0, w, step):
-            y_top = np.where(top_mask[:, x] > 0)[0]
-            if len(y_top) == 0:
-                continue
-            y_top_edge = int(y_top[-1])   # bottom edge of top surface
-
-            y_bot = np.where(bot_mask[:, x] > 0)[0]
-            if len(y_bot) == 0:
-                continue
-            y_bot_valid = y_bot[y_bot > y_top_edge]
-            if len(y_bot_valid) == 0:
-                continue
-            y_bot_edge = int(y_bot_valid[0])  # top edge of groove
-
-            gap = y_bot_edge - y_top_edge
-            if MIN_GAP_PX < gap < MAX_GAP_PX:
-                gaps.append(float(gap))
-
-        if len(gaps) < MIN_GAPS:
-            print(f"[predict_tread] Not enough gaps: {len(gaps)} < {MIN_GAPS}")
+        # ── 4. ตรวจสอบพิกเซล mask ขั้นต่ำ ──
+        total_px = h * w
+        if (np.sum(top_mask > 0) / total_px < 0.003 or
+                np.sum(bot_mask > 0) / total_px < 0.003):
+            print("[predict_tread] Mask pixel ratio too low")
             return None
 
-        gaps_arr = np.array(gaps)
-        median_gap = float(np.median(gaps_arr))
-        mean_gap   = float(np.mean(gaps_arr))
-        std_gap    = float(np.std(gaps_arr))
-        cv         = std_gap / mean_gap if mean_gap > 0 else 1.0
-        mad        = float(np.median(np.abs(gaps_arr - median_gap)))
+        # ── 5. สแกนร่องยาง v16 ──
+        depth_mm, grooves_found, status = _scan_individual_grooves_v16(
+            top_mask, bot_mask, settings
+        )
 
-        if cv > MAX_CV or mad > MAX_MAD:
-            print(f"[predict_tread] Filter failed: CV={cv:.3f} MAD={mad:.1f}")
+        if status != "SUCCESS" or depth_mm is None:
+            print(f"[predict_tread] Scan failed: {status}")
             return None
 
-        # Log formula: depth = A * ln(median_gap) + B
-        depth_mm = self.gap_a * float(np.log(median_gap)) + self.gap_b
-        depth_mm = float(np.clip(depth_mm, MIN_DEPTH, MAX_DEPTH))
-
-        print(f"[predict_tread] gap={median_gap:.1f}px CV={cv:.3f} MAD={mad:.1f} -> depth={depth_mm:.2f}mm")
+        print(
+            f"[predict_tread v16] grooves={grooves_found} "
+            f"depth={depth_mm:.2f}mm status={status}"
+        )
         return depth_mm
 
 # ---------------------------
