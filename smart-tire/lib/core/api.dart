@@ -4,7 +4,7 @@ class Api {
   static const String baseUrl = String.fromEnvironment(
     'BASE_URL',
     //defaultValue: 'http://10.0.2.2:8000',
-    defaultValue: 'http://192.168.1.13:8000',
+    defaultValue: 'https://smart-tire-backend-1036383233001.asia-southeast1.run.app',
   );
   static final Dio _dio = Dio(
     BaseOptions(

@@ -75,12 +75,12 @@ Future<void> bgNotificationCheck() async {
               final existingWarning = await db.query(
                 'notifications',
                 where: '(type = ? OR type = ?) AND carId = ? AND position = ? AND createdAt > ?',
-                whereArgs: ['tire_age_expiring_soon', 'deleted_tire_age_expiring_soon', carId, pos, cutoff],
+                whereArgs: ['tire_expiring_soon', 'deleted_tire_expiring_soon', carId, pos, cutoff],
               );
               if (existingWarning.isEmpty) {
                 await db.insert('notifications', {
                   'id': '${now.millisecondsSinceEpoch}_bg_$notifId',
-                  'type': 'tire_age_expiring_soon',
+                  'type': 'tire_expiring_soon',
                   'title': '⚠️ ใกล้หมดอายุยาง!',
                   'body': 'ยาง $thaiPos จะครบ 5 ปี ในอีก $daysLeft วัน (วันที่ $expDay/$expMonth/$expYear)',
                   'read': 0,
@@ -168,6 +168,35 @@ Future<void> bgNotificationCheck() async {
               }
             }
           } catch (_) {}
+        }
+
+        // ดอกยางต่ำกว่า 1.6 mm
+        final depthMm = (tire['lastDepthMm'] as num?)?.toDouble();
+        if (depthMm != null && depthMm < 1.6) {
+          final now = DateTime.now();
+          final cutoff = now.subtract(const Duration(hours: 24)).toIso8601String();
+          final existing = await db.query(
+            'notifications',
+            where: '(type = ? OR type = ?) AND carId = ? AND position = ? AND createdAt > ?',
+            whereArgs: ['tread_depth_low', 'deleted_tread_depth_low', carId, pos, cutoff],
+          );
+          if (existing.isEmpty) {
+            await db.insert('notifications', {
+              'id': '${now.millisecondsSinceEpoch}_bg_$notifId',
+              'type': 'tread_depth_low',
+              'title': '🚨 ดอกยางวิกฤต!',
+              'body': 'ดอกยาง $thaiPos ต่ำกว่า 1.6 มม. (${depthMm.toStringAsFixed(1)} มม.) ต้องเปลี่ยนยางทันที!',
+              'read': 0,
+              'carId': carId,
+              'position': pos,
+              'createdAt': now.toIso8601String(),
+            });
+            await _showNotif(
+              plugin, notifId++,
+              '🚨 ดอกยางวิกฤต!',
+              'ดอกยาง $thaiPos ต่ำกว่า 1.6 มม. (${depthMm.toStringAsFixed(1)} มม.)',
+            );
+          }
         }
       }
     }

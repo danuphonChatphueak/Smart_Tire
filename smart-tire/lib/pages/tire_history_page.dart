@@ -108,7 +108,7 @@ class _TireHistoryPageState extends State<TireHistoryPage> {
                                 child: Icon(Icons.straighten, color: Color(0xFFFFD700), size: 18),
                               ),
                               title: Text(
-                                "ความลึก: ${depthMm.toStringAsFixed(2)} มิลลิเมตร",
+                                "ความลึก: ${depthMm.toStringAsFixed(1)} มิลลิเมตร",
                                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                               ),
                               subtitle: Column(

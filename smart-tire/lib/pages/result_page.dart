@@ -118,39 +118,33 @@ class _ResultPageState extends State<ResultPage> {
 
     // Tread mode check
     if (widget.scanMode == "tread") {
-      final d = _readDepthMm(widget.result);
+      final rawD = _readDepthMm(widget.result);
 
-      if (d != null && d > 0) {
-        final prevMm = widget.prevDepth;
+      if (rawD != null && rawD > 0) {
+        // ตัดทศนิยมตำแหน่งที่ 2 ทิ้งเลย (เช่น 4.75 -> 4.7, 4.73 -> 4.7)
+        final d = (rawD * 10).truncateToDouble() / 10;
+        final rawPrevMm = widget.prevDepth;
+        final prevMm = rawPrevMm != null ? (rawPrevMm * 10).truncateToDouble() / 10 : null;
         final prevUpdateStr = widget.prevUpdateDate;
 
         if (prevMm != null && prevUpdateStr != null) {
           final now = DateTime.now();
           final prevDate = DateTime.parse(prevUpdateStr);
-          final isSameDay = now.year == prevDate.year &&
-              now.month == prevDate.month &&
-              now.day == prevDate.day;
           final diffHours = now.difference(prevDate).inHours.abs();
 
           // ตรวจสอบตามลำดับความสำคัญ (เรียงจากหนักไปเบา)
-          // Rule 3: ค่าเพิ่มขึ้น — บล็อก (ตรงนี้ต้องเช็คก่อน ก่อนที่ rule อื่นจะ fire ทับ)
-          if (d > prevMm + 0.01) {
+          // Rule 3: ค่าเพิ่มขึ้น — บล็อก (เมื่อตัดเป็น 1 ตำแหน่งแล้วสามารถเทียบ > ตรงๆ ได้เลย)
+          if (d > prevMm) {
             _hasValidationError = true;
             _isBlocking = true;
             _isDepthIncrease = true;
-            _validationMsg = "ความลึกดอกยางเพิ่มขึ้นจากเดิม (เดิม ${prevMm.toStringAsFixed(2)} มิลลิเมตร ➔ ใหม่ ${d.toStringAsFixed(2)} มิลลิเมตร)";
+            _validationMsg = "ความลึกดอกยางเพิ่มขึ้นจากเดิม (เดิม ${prevMm.toStringAsFixed(1)} มม. ➔ ใหม่ ${d.toStringAsFixed(1)} มม.)";
           }
           // Rule 2: สึกหรอเร็วมากผิดปกติภายใน 24 ชม. — เตือน (ไม่บล็อก)
           else if (diffHours <= 24 && (prevMm - d) > 0.5) {
             _hasValidationError = true;
             _isBlocking = false;
-            _validationMsg = "อัตราการสึกหรอสูงผิดปกติ (เดิม ${prevMm.toStringAsFixed(2)} มิลลิเมตร ➔ ใหม่ ${d.toStringAsFixed(2)} มิลลิเมตร)";
-          }
-          // Rule 1: วัดในวันเดียวกันแต่ค่าต่างกัน (เฉพาะกรณีค่าลด) — เตือน (ไม่บล็อก)
-          else if (isSameDay && d < prevMm - 0.01) {
-            _hasValidationError = true;
-            _isBlocking = false;
-            _validationMsg = "ข้อมูลขัดแย้งในวันเดียวกัน (เดิม ${prevMm.toStringAsFixed(2)} มิลลิเมตร ➔ ใหม่ ${d.toStringAsFixed(2)} มิลลิเมตร)";
+            _validationMsg = "อัตราการสึกหรอสูงผิดปกติ (เดิม ${prevMm.toStringAsFixed(1)} มม. ➔ ใหม่ ${d.toStringAsFixed(1)} มม.)";
           }
 
           if (_hasValidationError) {
@@ -180,9 +174,22 @@ class _ResultPageState extends State<ResultPage> {
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
-        title: const Text("ไม่สามารถวัดค่าความลึกได้"),
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent),
+            SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                "ไม่สามารถวัดค่าความลึกได้",
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
         content: const Text(
           "โดยอาจมีสาเหตุจากแสงไม่พอหรือการวางกล้องที่ไม่เหมาะสม \nกรุณาลองถ่ายใหม่อีกครั้ง",
+          style: TextStyle(color: Colors.white70),
         ),
         actions: [
           TextButton(
@@ -190,7 +197,7 @@ class _ResultPageState extends State<ResultPage> {
               Navigator.pop(context); // Close dialog
               Navigator.pop(context); // Back to capture
             },
-            child: const Text("ถ่ายใหม่",style: TextStyle(color: Colors.red)),
+            child: const Text("ถ่ายใหม่", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -207,16 +214,32 @@ class _ResultPageState extends State<ResultPage> {
           children: [
             Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent),
             SizedBox(width: 10),
-            Text("คำเตือน", style: TextStyle(color: Colors.white)),
+            Flexible(child: Text("คำเตือน", style: TextStyle(color: Colors.white))),
           ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("ความลึกเดิม: ${oldMm.toStringAsFixed(2)} มิลลิเมตร",
+            if (_validationMsg != null) ...[
+              Text(
+                _isBlocking ? " ตรวจพบความผิดปกติ:" : " ตรวจพบความผิดปกติ:",
+                style: TextStyle(
+                  color: _isBlocking ? Colors.redAccent : Colors.orangeAccent,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _validationMsg!,
+                style: const TextStyle(color: Colors.white70, fontSize: 14),
+              ),
+              const SizedBox(height: 16),
+            ],
+            Text("ความลึกเดิม: ${oldMm.toStringAsFixed(1)} มิลลิเมตร",
                 style: const TextStyle(color: Colors.white70)),
-            Text("ผลการวัดใหม่: ${newMm.toStringAsFixed(2)} มิลลิเมตร",
+            Text("ผลการวัดใหม่: ${newMm.toStringAsFixed(1)} มิลลิเมตร",
                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             const Text("แนะนำให้ลองถ่ายใหม่อีกครั้ง",
@@ -237,29 +260,21 @@ class _ResultPageState extends State<ResultPage> {
               onPressed: () => Navigator.pop(context), // Just close dialog
               child: const Text("ตกลง", style: TextStyle(color: Colors.white70)),
             ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFFD700),
-                foregroundColor: Colors.black,
-              ),
+            TextButton(
               onPressed: () {
                 Navigator.pop(context); // Close dialog
                 Navigator.pop(context); // Back to capture
               },
-              child: const Text("ถ่ายใหม่", style: TextStyle(fontWeight: FontWeight.bold)),
+              child: const Text("ถ่ายใหม่", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
             ),
           ] else ...[
             // กรณีบล็อก (ค่าเพิ่มขึ้น): ถ่ายใหม่ = เหลือง เท่านั้น
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFFD700),
-                foregroundColor: Colors.black,
-              ),
+            TextButton(
               onPressed: () {
                 Navigator.pop(context); // Close dialog
                 Navigator.pop(context); // Back to capture
               },
-              child: const Text("ถ่ายใหม่", style: TextStyle(fontWeight: FontWeight.bold)),
+              child: const Text("ถ่ายใหม่", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
             ),
           ],
         ],
@@ -272,27 +287,33 @@ class _ResultPageState extends State<ResultPage> {
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
-        title: const Text("ตรวจสอบไม่พบข้อมูล"),
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Row(
+          children: [
+            Icon(Icons.info_outline, color: Colors.orangeAccent),
+            SizedBox(width: 10),
+            Flexible(child: Text("ตรวจสอบไม่พบข้อมูล", style: TextStyle(color: Colors.white))),
+          ],
+        ),
         content: const Text(
           "ระบบไม่สามารถอ่านรหัสยางหรือขนาดได้ชัดเจน\nกรุณาขยับเข้าไปใกล้ หรือปรับแสง แล้วถ่ายใหม่",
+          style: TextStyle(color: Colors.white70),
         ),
         actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context); // close dialog
-              Navigator.pop(context); // close result page -> back to capture
-            },
-            child: const Text("ถ่ายใหม่"),
-          ),
           if (allowManual)
             TextButton(
               onPressed: () {
-                Navigator.pop(
-                  context,
-                ); // close dialog, stay on page to manual edit
+                Navigator.pop(context); // close dialog, stay on page
               },
-              child: const Text("กรอกเอง"),
+              child: const Text("กรอกเอง", style: TextStyle(color: Colors.white70)),
             ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context); // close dialog
+              Navigator.pop(context); // back to capture
+            },
+            child: const Text("ถ่ายใหม่", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+          ),
         ],
       ),
     );
@@ -303,26 +324,37 @@ class _ResultPageState extends State<ResultPage> {
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
-        title: const Text("ขนาดข้อมูลยางผิดปกติ"),
+        backgroundColor: const Color(0xFF2A2A2A),
+        title: const Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.redAccent),
+            SizedBox(width: 10),
+            Flexible(child: Text("ขนาดข้อมูลยางผิดปกติ", style: TextStyle(color: Colors.white))),
+          ],
+        ),
         content: Text(
           "ข้อมูลขนาดยางไม่อยู่ในเกณฑ์มาตรฐาน\n"
           "(เลข 3 ตัวแรกต้องอยู่ระหว่าง 155-285 และเลขหลังเครื่องหมาย '/' ต้องอยู่ระหว่าง 30-80)\n\n"
           "❗ นี้ไม่ใช่ข้อมูลขนาดยางของรถเก๋งหรือรถกระบะ\n\n"
           "${fromSubmit ? 'กรุณาแก้ไขข้อมูลให้ถูกต้อง หรือถ่ายภาพใหม่' : 'กรุณาถ่ายใหม่ให้ชัดเจนขึ้น หรือกรอกข้อมูลนี้ด้วยตนเอง'}",
+          style: const TextStyle(color: Colors.white70),
         ),
         actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context); // continue to manual edit
+            },
+            child: Text(
+              fromSubmit ? "แก้ไขข้อมูล" : "กรอกเอง",
+              style: const TextStyle(color: Colors.white70),
+            ),
+          ),
           TextButton(
             onPressed: () {
               Navigator.pop(context); // close dialog
               Navigator.pop(context); // back to capture
             },
-            child: const Text("ถ่ายใหม่"),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context); // continue to manual edit
-            },
-            child: Text(fromSubmit ? "แก้ไขข้อมูล" : "กรอกเอง"),
+            child: const Text("ถ่ายใหม่", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -363,10 +395,17 @@ class _ResultPageState extends State<ResultPage> {
   }
 
   double? _readDepthMm(Map<String, dynamic> r) {
+    double? val;
     if (r["depthMm"] is Map) {
-      return (r["depthMm"]["value"] as num?)?.toDouble();
+      val = (r["depthMm"]["value"] as num?)?.toDouble();
+    } else {
+      val = (r["depthResult"]?["depthMm"] as num?)?.toDouble();
     }
-    return (r["depthResult"]?["depthMm"] as num?)?.toDouble();
+    
+    if (val != null) {
+      return (val * 10).truncateToDouble() / 10;
+    }
+    return null;
   }
 
   /// อ่าน base64 รูป crop จาก result
@@ -541,7 +580,8 @@ class _ResultPageState extends State<ResultPage> {
     final hasValue = depthMm != null && depthMm > 0;
 
     if (hasValue) {
-      final km = depthMm * 7500.0;
+      final truncatedMm = (depthMm * 10).truncateToDouble() / 10;
+      final km = truncatedMm * 7500.0;
       final formatted = km
           .toStringAsFixed(0)
           .replaceAllMapped(
@@ -572,7 +612,7 @@ class _ResultPageState extends State<ResultPage> {
               Text(
                 depthMm == null
                     ? "-"
-                    : (depthMm == 0 ? "วัดค่าไม่ได้" : "${depthMm.toStringAsFixed(2)} มิลลิเมตร"),
+                    : (depthMm == 0 ? "วัดค่าไม่ได้" : "${depthMm.toStringAsFixed(1)} มิลลิเมตร"),
                 style: TextStyle(
                   fontSize: depthMm == 0 ? 24 : 28,
                   fontWeight: FontWeight.w900,

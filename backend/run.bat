@@ -1,5 +1,7 @@
 @echo off
-cd backend
+if exist backend (
+    cd backend
+)
 
 IF NOT EXIST .venv (
     echo Creating virtual environment...
@@ -15,7 +17,7 @@ IF NOT EXIST .env (
 )
 
 echo Installing dependencies...
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 
 echo Starting server...
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000

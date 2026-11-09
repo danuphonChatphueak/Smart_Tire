@@ -1,0 +1,50 @@
+steps:
+  # Step 1: Build Docker image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - build
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:$COMMIT_SHA"
+      - "-t"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest"
+      - "."
+    dir: "backend"
+
+  # Step 2: Push image to Artifact Registry
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - push
+      - "--all-tags"
+      - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}"
+
+  # Step 3: Deploy to Cloud Run
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - "${_SERVICE}"
+      - "--image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:$COMMIT_SHA"
+      - "--region=${_REGION}"
+      - "--platform=managed"
+      - "--allow-unauthenticated"
+      - "--memory=4Gi"
+      - "--cpu=2"
+      - "--timeout=300"
+      - "--concurrency=4"
+      - "--min-instances=0"
+      - "--max-instances=3"
+      - "--set-env-vars=infer_device=cpu"
+
+substitutions:
+  _REGION: asia-southeast1
+  _REPO: smart-tire
+  _SERVICE: smart-tire-backend
+
+images:
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:$COMMIT_SHA"
+  - "${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8

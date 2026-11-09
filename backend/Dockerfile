@@ -27,13 +27,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # ---------- Stage 2: Runtime ----------
 FROM python:3.11-slim AS runtime
 
-# OpenCV & system dependencies
+# OpenCV & system dependencies + curl (for healthcheck)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -52,22 +53,21 @@ RUN mkdir -p uploads
 # ---- Model files ----
 # Models are copied from the local app/models directory.
 # Make sure .pt / .pth files exist before building:
-#   app/models/det_tire_code.pt
-#   app/models/rec_tire_code.pth
-#   app/models/depth_tire.pt
+#   app/models/mask.pt
+#   app/models/model_final.pt
 
 # ---- Environment Variables ----
-# Optional (have defaults in config.py):
-#   infer_device=cpu, det_model_path, rec_model_path, depth_model_path
 ENV PYTHONUNBUFFERED=1
 ENV infer_device=cpu
+ENV GOOGLE_VISION_API_KEY=""
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD python -c "import httpx; r = httpx.get('http://localhost:8000/docs'); assert r.status_code == 200" || exit 1
+
+# Health check (curl เร็วกว่า httpx สำหรับ container health)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -f http://localhost:8080/docs || exit 1
 
 # Start server
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]

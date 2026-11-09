@@ -763,7 +763,7 @@ class ModelsRuntime:
         import cv2
         from google.cloud import vision
         
-        API_KEY = 'AIzaSyC-PK_n5OK7elRsmMFQPdyqzkpeNllbu-4'
+        API_KEY = settings.GOOGLE_VISION_API_KEY
 
         def _to_base64(img_bgr) -> str:
             if img_bgr is None or img_bgr.size == 0:

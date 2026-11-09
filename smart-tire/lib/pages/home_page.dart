@@ -65,7 +65,8 @@ class _HomePageState extends State<HomePage> {
   double _calcLifeKmFromMm(double mm) {
     // Usable tread starts from 1.6mm up to ~8.0mm
     // Formula: (current_depth - 1.6) * 7500 km/mm
-    final km = (mm - 1.6) * 7500.0;
+    final truncatedMm = (mm * 10).truncateToDouble() / 10;
+    final km = (truncatedMm - 1.6) * 7500.0;
     if (km < 0) return 0;
     if (km > 60000) return 60000;
     return km;
@@ -74,7 +75,8 @@ class _HomePageState extends State<HomePage> {
   /// คำนวณระยะทางปลอดภัย: 1 mm = 7,500 km
   String _safeDistanceLabel(double? depth) {
     if (depth == null) return "-";
-    final km = depth * 7500.0;
+    final truncatedMm = (depth * 10).truncateToDouble() / 10;
+    final km = truncatedMm * 7500.0;
     final formatted = km
         .toStringAsFixed(0)
         .replaceAllMapped(
@@ -543,6 +545,55 @@ class _HomePageState extends State<HomePage> {
           _loadUnreadCount();
         }
       }
+
+      // ยางใกล้หมดอายุ ≤ 7 วัน
+      if (_isExpiringSoon(dot) && !_isExpired(dot)) {
+        final already = await LocalDb.hasRecentNotification(
+          "tire_expiring_soon",
+          currentCarId,
+          pos,
+        );
+        if (!already) {
+          await LocalDb.addNotification(
+            type: "tire_expiring_soon",
+            title: "⚠️ ยางใกล้หมดอายุ!",
+            body: "ยาง $thaiPos ใกล้หมดอายุ 5 ปีแล้ว! ควรเตรียมเปลี่ยนยาง",
+            carId: currentCarId,
+            position: pos,
+          );
+          await LocalNotificationService.show(
+            id: notifId++,
+            title: "⚠️ ยางใกล้หมดอายุ!",
+            body: "ยาง $thaiPos ใกล้หมดอายุ 5 ปีแล้ว! ควรเตรียมเปลี่ยนยาง",
+          );
+          _loadUnreadCount();
+        }
+      }
+
+      // ดอกยางต่ำกว่า 1.6 mm
+      final depthMm = (t["depthMm"] as num?)?.toDouble();
+      if (depthMm != null && depthMm < 1.6) {
+        final already = await LocalDb.hasRecentNotification(
+          "tread_depth_low",
+          currentCarId,
+          pos,
+        );
+        if (!already) {
+          await LocalDb.addNotification(
+            type: "tread_depth_low",
+            title: "🚨 ดอกยางวิกฤต!",
+            body: "ดอกยาง $thaiPos ต่ำกว่า 1.6 มม. (${depthMm.toStringAsFixed(1)} มม.) ต้องเปลี่ยนยางทันที!",
+            carId: currentCarId,
+            position: pos,
+          );
+          await LocalNotificationService.show(
+            id: notifId++,
+            title: "🚨 ดอกยางวิกฤต!",
+            body: "ดอกยาง $thaiPos ต่ำกว่า 1.6 มม. (${depthMm.toStringAsFixed(1)} มม.) ต้องเปลี่ยนยางทันที!",
+          );
+          _loadUnreadCount();
+        }
+      }
     }
   }
 
@@ -984,7 +1035,7 @@ class _HomePageState extends State<HomePage> {
                                       "ความลึกดอกยาง",
                                       depth == null
                                           ? "-"
-                                          : "${depth.toStringAsFixed(2)} มิลลิเมตร",
+                                          : "${depth.toStringAsFixed(1)} มิลลิเมตร",
                                       color: (depth != null && depth < 1.6)
                                           ? Colors.redAccent
                                           : (_isTreadOld(t) ? Colors.orangeAccent : null),
@@ -1407,7 +1458,9 @@ class _HomePageState extends State<HomePage> {
         sizeCode: size.isNotEmpty ? size : null,
       );
     } else {
-      final mm = (result["depthMm"] ?? result["depth"] as num?)?.toDouble();
+      final rawMm = (result["depthMm"] ?? result["depth"] as num?)?.toDouble();
+      // ตัดทศนิยมตำแหน่งที่ 2 ทิ้ง (truncate) เช่น 2.37 → 2.3
+      final mm = rawMm != null ? (rawMm * 10).truncateToDouble() / 10 : null;
       if (mm != null) {
         t["depthMm"] = mm;
         t["depthConf"] = (result["depthConf"] as num?)?.toDouble();

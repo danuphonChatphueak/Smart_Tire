@@ -52,8 +52,9 @@ class TireCalculator {
 
     // Case 2: Depth percentage from Tread Depth
     if (treadDepth != null) {
+      final truncatedMm = (treadDepth * 10).truncateToDouble() / 10;
       // Formula: (depth - 1.6) / (8.0 - 1.6) * 100
-      xPercentage = ((treadDepth - 1.6) / (8.0 - 1.6)) * 100.0;
+      xPercentage = ((truncatedMm - 1.6) / (8.0 - 1.6)) * 100.0;
       if (xPercentage < 0) xPercentage = 0.0;
       if (xPercentage > 100) xPercentage = 100.0;
     }

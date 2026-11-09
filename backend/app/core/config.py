@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     PUSH_PROVIDER: str = "onesignal"
     ONESIGNAL_APP_ID: str = ""
     ONESIGNAL_API_KEY: str = ""
+    GOOGLE_VISION_API_KEY: str = ""
     infer_device: str = "cpu"
     det_model_path: str = "app/models/det_tire_code.pt"
     rec_model_path: str = "app/models/rec_tire_code.pth"

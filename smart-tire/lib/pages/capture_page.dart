@@ -122,9 +122,13 @@ class _CapturePageState extends State<CapturePage> {
         ),
       );
 
-      // ส่งค่าที่ confirm กลับ HomePage
+      // ถ้า user ยืนยันผล (ไม่ได้กดถ่ายใหม่) → ส่งค่ากลับ HomePage
       if (!mounted) return;
-      Navigator.pop(context, confirmed);
+      if (confirmed != null) {
+        Navigator.pop(context, confirmed);
+      }
+      // ถ้า confirmed == null หมายความว่า user กด "ถ่ายใหม่"
+      // → ค้างอยู่ที่ CapturePage เพื่อถ่ายใหม่ได้เลย
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
