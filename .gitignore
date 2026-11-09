@@ -23,6 +23,7 @@ smart-tire/switch
 backend/__pycache__/
 backend/*.pyc
 backend/.env
+backend/.env.example
 backend/.venv/
 backend/venv/
 
